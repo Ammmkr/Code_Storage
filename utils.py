@@ -1,74 +1,142 @@
 import numpy as np
 from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+
+# 解决matplotlib中文显示问题
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 
+# 加载并预处理MNIST数据集
 def load_mnist():
-    """加载MNIST并按8:2划分训练集/验证集（无测试集，匹配用户要求）"""
-    # 加载原始数据集（70000样本）
     mnist = fetch_openml('mnist_784', version=1, cache=True, as_frame=False)
-    X = mnist.data  # (70000, 784)
-    y = mnist.target.astype(np.int64)  # (70000,)
-
-    # 1. 像素值归一化到[0,1]（报告4.1要求）
+    X = mnist.data
+    y = mnist.target.astype(np.int64)
     X = X / 255.0
 
-    # 2. 8:2划分训练集（56000）/验证集（14000）（无测试集）
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, shuffle=True
-    )
+    # 标签One-hot编码
+    y_one_hot = np.zeros((y.shape[0], 10))
+    y_one_hot[np.arange(y.shape[0]), y] = 1
 
-    print("数据集划分完成（无测试集）：")
-    print(f"训练集：{X_train.shape[0]} 样本 | 验证集：{X_val.shape[0]} 样本")
-    return X_train, X_val, y_train, y_val
-
-
-def one_hot_encode(y, num_classes=10):
-    """纯NumPy实现One-hot编码（报告4.1要求）"""
-    m = y.shape[0]
-    y_one_hot = np.zeros((m, num_classes))
-    y_one_hot[np.arange(m), y] = 1
-    return y_one_hot
+    # 8:2划分训练集/验证集
+    X_train, X_val, y_train, y_val = train_test_split(X, y_one_hot, test_size=0.2, random_state=42)
+    y_train_raw, y_val_raw = train_test_split(y, test_size=0.2, random_state=42)
+    return X_train, X_val, y_train, y_val, y_train_raw, y_val_raw
 
 
-def create_mini_batches(X, y, batch_size=64, random_state=42):
-    """Mini-batch划分（不丢弃最后一个批次，报告4.3要求）"""
-    np.random.seed(random_state)
-    m = X.shape[0]
-    permutation = np.random.permutation(m)
-    X_shuffled = X[permutation]
-    y_shuffled = y[permutation]
-    mini_batches = []
-
-    num_batches = m // batch_size
-    for i in range(num_batches):
-        X_batch = X_shuffled[i * batch_size: (i + 1) * batch_size]
-        y_batch = y_shuffled[i * batch_size: (i + 1) * batch_size]
-        mini_batches.append((X_batch, y_batch))
-
-    # 处理最后一个不足批次
-    if m % batch_size != 0:
-        X_batch = X_shuffled[num_batches * batch_size:]
-        y_batch = y_shuffled[num_batches * batch_size:]
-        mini_batches.append((X_batch, y_batch))
-
-    return mini_batches
+# 计算模型准确率
+def calculate_accuracy(y_pred, y_true_raw):
+    y_pred_label = np.argmax(y_pred, axis=1)
+    return accuracy_score(y_true_raw, y_pred_label)
 
 
-def compute_confusion_matrix(y_true, y_pred, num_classes=10):
-    """计算10×10混淆矩阵（报告5.3.2要求）"""
-    conf_mat = np.zeros((num_classes, num_classes), dtype=int)
-    for true, pred in zip(y_true, y_pred):
-        conf_mat[true, pred] += 1
+# Mini-batch数据生成器
+def generate_minibatch(X, y, y_raw, batch_size):
+    n_samples = X.shape[0]
+    indices = np.random.permutation(n_samples)
+    X_shuffled = X[indices]
+    y_shuffled = y[indices]
+    y_raw_shuffled = y_raw[indices]
+    for i in range(0, n_samples, batch_size):
+        yield X_shuffled[i:i + batch_size], y_shuffled[i:i + batch_size], y_raw_shuffled[i:i + batch_size]
+
+
+# 混淆矩阵计算（纯numpy实现）
+def compute_confusion_matrix(y_pred, y_true_raw, num_classes=10):
+    y_pred_label = np.argmax(y_pred, axis=1)
+    conf_mat = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for true_label, pred_label in zip(y_true_raw, y_pred_label):
+        conf_mat[true_label, pred_label] += 1
     return conf_mat
 
 
-def get_error_cases(X, y_true, y_pred, num_cases=10):
-    """提取分类错误案例（报告5.3.3要求）"""
-    error_indices = np.where(y_true != y_pred)[0]
+# 混淆矩阵可视化（新增save_path参数，支持保存）
+def plot_confusion_matrix(conf_mat, class_names=None, save_path=None, dpi=300):
+    """
+    绘制混淆矩阵并可选保存
+    :param conf_mat: 混淆矩阵
+    :param class_names: 类别名称
+    :param save_path: 保存路径（None则不保存）
+    :param dpi: 保存分辨率
+    """
+    if class_names is None:
+        class_names = [str(i) for i in range(conf_mat.shape[0])]
+
+    plt.figure(figsize=(10, 8))
+    im = plt.imshow(conf_mat, cmap=plt.cm.Blues)
+    plt.colorbar(im)
+
+    plt.xticks(np.arange(len(class_names)), class_names, fontsize=10)
+    plt.yticks(np.arange(len(class_names)), class_names, fontsize=10)
+    plt.xlabel('预测标签', fontsize=12)
+    plt.ylabel('真实标签', fontsize=12)
+    plt.title('MNIST分类混淆矩阵', fontsize=14, pad=20)
+
+    thresh = conf_mat.max() / 2.0
+    for i in range(conf_mat.shape[0]):
+        for j in range(conf_mat.shape[1]):
+            plt.text(j, i, conf_mat[i, j],
+                     ha="center", va="center",
+                     color="white" if conf_mat[i, j] > thresh else "black",
+                     fontsize=8)
+
+    plt.tight_layout()
+
+    # 新增：保存图像（先保存再show，避免空白）
+    if save_path is not None:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"混淆矩阵已保存至：{save_path}")
+
+    plt.show()
+    plt.close()  # 释放内存
+
+
+# 分类错误样本可视化（新增save_path参数，支持保存）
+def plot_misclassified_samples(X, y_pred, y_true_raw, num_samples=10, save_path=None, dpi=300):
+    """
+    可视化错误样本并可选保存
+    :param X: 样本特征
+    :param y_pred: 模型输出概率
+    :param y_true_raw: 真实标签
+    :param num_samples: 显示样本数
+    :param save_path: 保存路径（None则不保存）
+    :param dpi: 保存分辨率
+    """
+    y_pred_label = np.argmax(y_pred, axis=1)
+    misclassified_idx = np.where(y_pred_label != y_true_raw)[0]
+
+    if len(misclassified_idx) < num_samples:
+        num_samples = len(misclassified_idx)
+        if num_samples == 0:
+            print("无分类错误样本！")
+            return
+
     np.random.seed(42)
-    selected_indices = np.random.choice(error_indices, size=min(num_cases, len(error_indices)), replace=False)
-    X_error = X[selected_indices].reshape(-1, 28, 28)  # 还原为28×28图像
-    y_true_error = y_true[selected_indices]
-    y_pred_error = y_pred[selected_indices]
-    return X_error, y_true_error, y_pred_error
+    selected_idx = np.random.choice(misclassified_idx, num_samples, replace=False)
+
+    fig, axes = plt.subplots(2, 5, figsize=(12, 5))
+    axes = axes.flatten()
+
+    for i, idx in enumerate(selected_idx):
+        img = X[idx].reshape(28, 28)
+        true_label = y_true_raw[idx]
+        pred_label = y_pred_label[idx]
+        axes[i].imshow(img, cmap='gray')
+        axes[i].set_title(f'真实：{true_label}\n预测：{pred_label}', fontsize=9)
+        axes[i].axis('off')
+
+    for i in range(num_samples, len(axes)):
+        axes[i].axis('off')
+
+    plt.suptitle('MNIST分类错误样本示例', fontsize=12)
+    plt.tight_layout()
+
+    # 新增：保存图像
+    if save_path is not None:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"错误样本可视化已保存至：{save_path}")
+
+    plt.show()
+    plt.close()
